@@ -18,7 +18,7 @@ if __name__ == "__main__":
         train_dataset, 
         batch_size=16, 
         shuffle=True,
-        num_workers=4,
+        num_workers=1,
         pin_memory=True
     )
 
@@ -27,7 +27,7 @@ if __name__ == "__main__":
         val_dataset, 
         batch_size=16, 
         shuffle=False,
-        num_workers=4,
+        num_workers=1,
         pin_memory=True
     )
 

@@ -18,11 +18,9 @@ def train(model, train_loader, optimizer, criterion, device, epoch, max_iters=20
     max_iters = len(train_loader)
 
     for iter_id, batch in enumerate(train_loader):
-        
         out = model(batch[0].float().to(device))
-        print(out.shape)
-        ground_truth = torch.tensor(batch[1], dtype=torch.float, device=device)
-        print(ground_truth.shape)
+        ground_truth = batch[1].clone().detach().to(device).float()
+        #print(ground_truth.shape)
         loss = criterion(out, ground_truth)
 
         loss.backward()
