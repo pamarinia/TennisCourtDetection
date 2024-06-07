@@ -9,6 +9,16 @@ from scipy.spatial import distance
 from tracknet import CourtTrackNet
 
 def read_video(video_path):
+    """
+    This function reads a video from video_path and returns the frames and the frames per second.
+
+    Args:
+        video_path: A string representing the path to the video.
+    
+    Returns:
+        frames: A list of numpy arrays representing the frames of the video.
+        fps: An integer representing the frames per second of the video.
+    """
     cap = cv2.VideoCapture(video_path)
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     frames = []
@@ -20,7 +30,18 @@ def read_video(video_path):
     cap.release()
     return frames, fps
 
+
 def infer_model(frames, model):
+    """
+    This function takes a list of frames and a model and returns the keypoints of the frames.
+    
+    Args:
+        frames: A list of numpy arrays representing the frames.
+        model: A PyTorch model.
+    
+    Returns:
+        keypoints_track: A list of lists. Each list contains the keypoints of a frame.
+    """
     keypoints_track = []
     for frame in frames:
         img = cv2.resize(frame, (640, 360))
@@ -42,6 +63,17 @@ def infer_model(frames, model):
 
 
 def remove_outliers(ball_track, dists, max_dist=100):
+    """
+    This function removes the outliers from the ball_track.
+
+    Args:
+        ball_track: A list of tuples. Each tuple contains the (x, y) coordinates of the ball.
+        dists: A list of distances between the keypoints.
+        max_dist: An integer representing the maximum distance between the keypoints.   
+    
+    Returns:
+        ball_track: A list of tuples. Each tuple contains the (x, y) coordinates of the ball.
+    """
     outliers = list(np.where(np.array(dists) > max_dist)[0])
     for i in outliers:
         if (dists[i+1] > max_dist) | (dists[i+1] == -1):       
@@ -53,12 +85,25 @@ def remove_outliers(ball_track, dists, max_dist=100):
     return ball_track
 
 
-def write_video(frames, keypoints_track, path_output_video, fps):
+def write_video(frames, keypoints_track, kp_refined, path_output_video, fps):
+    """
+    This function writes the frames with the keypoints to a video.
+
+    Args:
+        frames: A list of numpy arrays representing the frames.
+        keypoints_track: A list of lists. Each list contains the keypoints of a frame.
+        path_output_video: A string representing the path to the output video.
+        fps: An integer representing the frames per second of the video.
+    """
     height, width = frames[0].shape[:2]
     out = cv2.VideoWriter(path_output_video, cv2.VideoWriter_fourcc(*'DIVX'), fps, (width, height))
     for num in range(len(frames)):
         frame = frames[num]
-        for kp in keypoints_track[num]:
+        """for kp in keypoints_track[num]:
+            x = int(kp[0])
+            y = int(kp[1])
+            frame = cv2.circle(frame, (x, y), radius=5, color=(0, 0, 255), thickness=-1)"""
+        for kp in kp_refined[num]:
             x = int(kp[0])
             y = int(kp[1])
             frame = cv2.circle(frame, (x, y), radius=5, color=(0, 0, 255), thickness=-1)
@@ -77,20 +122,19 @@ if __name__ == '__main__':
 
     frames, fps = read_video('input/Med_Djo_cut.mp4')
     keypoints_track = infer_model(frames, model)
+    keypoints_track_refined = keypoints_track.copy()
     
     for i, frame in enumerate(frames):
+        print(f"Frame {i}")
         #print(keypoints_track[i])
-        keypoints = keypoints_track[i]
+        keypoints = keypoints_track_refined[i]
         for j, kp in enumerate(keypoints):
             x, y = kp
-            x, y = refine_kps(frame, int(x), int(y))
-            keypoints_track[i][j] = x, y
+            x, y = refine_kps(frame, int(x), int(y), j)
+            keypoints_track_refined[i][j] = x, y
         #print(keypoints_track[i])
         
-
-
-
-    write_video(frames, keypoints_track, 'outputs/Med_Djo_cut_tracked.avi', fps)
+    write_video(frames, keypoints_track, keypoints_track_refined, 'outputs/Med_Djo_cut_tracked.avi', fps)
 
 
 
