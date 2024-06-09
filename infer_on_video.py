@@ -1,7 +1,10 @@
 import cv2
 import numpy as np
 import torch
-from postprocess import refine_kps
+import torch.nn.functional as F
+from tqdm import tqdm
+from postprocess import postprocess, refine_kps
+from homography import get_trans_matrix, refer_kps
 
 from general import postprocess
 from scipy.spatial import distance
@@ -31,6 +34,39 @@ def read_video(video_path):
     return frames, fps
 
 
+def write_video(imgs_new, fps, path_output_video):
+    """
+    This function writes the frames to a video.
+
+    Args:
+        imgs_new: A list of numpy arrays representing the frames.
+        fps: An integer representing the frames per second of the video.
+        path_output_video: A string representing the path to the output video.
+    """
+    height, width = imgs_new[0].shape[:2]
+    out = cv2.VideoWriter(path_output_video, cv2.VideoWriter_fourcc(*'DIVX'), fps, (width, height))
+    for img in imgs_new:
+        out.write(img)
+    out.release()
+
+
+def add_circle_frame(frame, keypoints_track):
+    """
+    This function adds circles to the keypoints of the frames.
+
+    Args:
+        keypoints_track: A list of lists. Each list contains the keypoints of a frame.
+    
+    Returns:
+        frames: A list of numpy arrays representing the frames with the keypoints.
+    """
+    for kp in keypoints_track:
+        x = int(kp[0])
+        y = int(kp[1])
+        frame = cv2.circle(frame, (x, y), radius=5, color=(0, 0, 255), thickness=-1)
+
+    return frame
+
 def infer_model(frames, model):
     """
     This function takes a list of frames and a model and returns the keypoints of the frames.
@@ -43,20 +79,30 @@ def infer_model(frames, model):
         keypoints_track: A list of lists. Each list contains the keypoints of a frame.
     """
     keypoints_track = []
-    for frame in frames:
+    for frame in tqdm(frames):
         img = cv2.resize(frame, (640, 360))
         img = img.astype(np.float32) / 255.0
         img = np.rollaxis(img, 2, 0)
-        img = np.expand_dims(img, axis=0)
-        input = torch.from_numpy(img).float().to(device)
+        img = torch.tensor(img).unsqueeze(0)
+        input = img.float().to(device)
 
-        out = model(input)
-        output = out.detach().cpu().numpy()
+        out = model(input)[0]
+        preds = F.sigmoid(out).detach().cpu().numpy()
+
         keypoints = []
-        for hm in output[0]:
-            x_pred, y_pred = postprocess(hm)
+        for kps_num in range(14):
+            heatmap = (preds[kps_num] * 255).astype(np.uint8)
+            x_pred, y_pred = postprocess(heatmap)
+            if kps_num not in [8, 9, 12]:
+                x_pred, y_pred = refine_kps(frame, int(x_pred), int(y_pred), kps_num)
             keypoints.append((x_pred, y_pred))
         #print(keypoints)
+
+        matrix_trans = get_trans_matrix(keypoints)
+        if matrix_trans is not None:
+            keypoints = cv2.perspectiveTransform(refer_kps, matrix_trans)
+            keypoints = [np.squeeze(kp) for kp in keypoints]
+        
         keypoints_track.append(keypoints)
 
     return keypoints_track
@@ -85,56 +131,21 @@ def remove_outliers(ball_track, dists, max_dist=100):
     return ball_track
 
 
-def write_video(frames, keypoints_track, kp_refined, path_output_video, fps):
-    """
-    This function writes the frames with the keypoints to a video.
-
-    Args:
-        frames: A list of numpy arrays representing the frames.
-        keypoints_track: A list of lists. Each list contains the keypoints of a frame.
-        path_output_video: A string representing the path to the output video.
-        fps: An integer representing the frames per second of the video.
-    """
-    height, width = frames[0].shape[:2]
-    out = cv2.VideoWriter(path_output_video, cv2.VideoWriter_fourcc(*'DIVX'), fps, (width, height))
-    for num in range(len(frames)):
-        frame = frames[num]
-        """for kp in keypoints_track[num]:
-            x = int(kp[0])
-            y = int(kp[1])
-            frame = cv2.circle(frame, (x, y), radius=5, color=(0, 0, 255), thickness=-1)"""
-        for kp in kp_refined[num]:
-            x = int(kp[0])
-            y = int(kp[1])
-            frame = cv2.circle(frame, (x, y), radius=5, color=(0, 0, 255), thickness=-1)
-        out.write(frame)
-    out.release()
-
-
 if __name__ == '__main__':
 
     model = CourtTrackNet(out_channels=15)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    model.load_state_dict(torch.load('models/model_tennis_court_det.pt'))
     model = model.to(device)
+    model.load_state_dict(torch.load('models/model_tennis_court_det.pt'))
     model.eval()
 
     frames, fps = read_video('input/Med_Djo_cut.mp4')
     keypoints_track = infer_model(frames, model)
-    keypoints_track_refined = keypoints_track.copy()
     
-    for i, frame in enumerate(frames):
-        print(f"Frame {i}")
-        #print(keypoints_track[i])
-        keypoints = keypoints_track_refined[i]
-        for j, kp in enumerate(keypoints):
-            x, y = kp
-            x, y = refine_kps(frame, int(x), int(y), j)
-            keypoints_track_refined[i][j] = x, y
-        #print(keypoints_track[i])
-        
-    write_video(frames, keypoints_track, keypoints_track_refined, 'outputs/Med_Djo_cut_tracked.avi', fps)
+    for frame, keypoints in zip(frames, keypoints_track):
+        frame = add_circle_frame(frame, keypoints)
+    write_video(frames, fps, 'outputs/Med_Djo_cut_tracked.avi')
 
 
 

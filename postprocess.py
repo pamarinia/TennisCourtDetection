@@ -20,16 +20,14 @@ def line_intersection(line1, line2):
     l2 = Line((line2[0], line2[1]), (line2[2], line2[3]))
 
     intersection = l1.intersection(l2)
-
-    if intersection:
-        #print('Intersection found')
-        return intersection[0].coordinates
-    else:
-        pass
-        #print('No intersection found')
+    point = None
+    if len(intersection) > 0:
+        if isinstance(intersection[0], sympy.geometry.point.Point2D):
+            point = intersection[0].coordinates
+    return point
 
 
-def refine_kps(img, x, y, number, crop_size=25):
+def refine_kps(img, x, y, number, crop_size=40):
     """
     This function refines the keypoints by detecting the lines around the keypoints and finding the intersection point of the lines.
 
@@ -48,19 +46,13 @@ def refine_kps(img, x, y, number, crop_size=25):
     x_max = min(img_width, x + crop_size)
     y_min = max(0, y - crop_size)
     y_max = min(img_height, y + crop_size)    
+    #print(x_min, x_max, y_min, y_max)
+    refined_x, refined_y = x, y
     
     img_crop = img[y_min:y_max, x_min:x_max]
-    
-    center_x = img_crop.shape[1] // 2
-    center_y = img_crop.shape[0] // 2
-
-    refined_x, refined_y = x, y
-
     lines = detect_lines(img_crop)
 
-    
     if len(lines) > 1:
-
         lines = merge_lines(lines)
         #print(len(lines))
         if len(lines) == 2:
@@ -68,14 +60,14 @@ def refine_kps(img, x, y, number, crop_size=25):
             #img_crop = cv2.line(img_crop, (lines[1][0], lines[1][1]), (lines[1][2], lines[1][3]), (0, 255, 255), 2)
             intersection = line_intersection(lines[0], lines[1])
             if intersection:
-                new_x = int(intersection[0])
-                new_y = int(intersection[1])
+                new_x = int(intersection[1])
+                new_y = int(intersection[0])
 
                 if new_x > 0 and new_x < img_crop.shape[0] and new_y > 0 and new_y < img_crop.shape[1]:
                     refined_x, refined_y = new_x, new_y
                     #img_crop = cv2.circle(img_crop, (refined_x, refined_y), radius=4, color=(255, 0, 0), thickness=-1)
-                    refined_x = x - center_x + refined_x
-                    refined_y = y - center_y + refined_y
+                    refined_x = x_min + new_x
+                    refined_y = y_min + new_y
         elif len(lines) < 2:
             pass
             #print('Not enough lines found')
@@ -87,7 +79,7 @@ def refine_kps(img, x, y, number, crop_size=25):
         #print('No lines found')
 
 
-    #img_crop = cv2.circle(img_crop, (center_x, center_y), radius=6, color=(0, 0, 0), thickness=-1)
+    #img_crop = cv2.circle(img_crop, (x, y), radius=6, color=(0, 0, 0), thickness=-1)
     #img_crop = cv2.circle(img_crop, (refined_x, refined_y), radius=4, color=(255, 0, 0), thickness=-1)
     #cv2.imwrite(f'input/image_crop_{number}.jpg', img_crop)
 
@@ -106,7 +98,7 @@ def detect_lines(img):
     """
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     img_gray = cv2.threshold(img_gray, 200, 255, cv2.THRESH_BINARY)[1]
-    lines = cv2.HoughLinesP(img_gray, rho=1, theta=np.pi/1800, threshold = 10, minLineLength=5, maxLineGap=20)
+    lines = cv2.HoughLinesP(img_gray, rho=1, theta=np.pi/180, threshold = 30, minLineLength=10, maxLineGap=30)
     lines = np.squeeze(lines)
     if len(lines.shape) > 0:
         if len(lines) == 4 and not isinstance(lines[0], np.ndarray):
@@ -136,7 +128,7 @@ def merge_lines(lines):
     mask = [True] * len(lines)
     new_lines = []
 
-    """for i, line in enumerate(lines):
+    for i, line in enumerate(lines):
         if mask[i]:
             for j, s_line in enumerate(lines[i + 1:]):
                 if mask[i + j + 1]:
@@ -148,9 +140,9 @@ def merge_lines(lines):
                         line = np.array([int((x1+x3)/2), int((y1+y3)/2), int((x2+x4)/2), int((y2+y4)/2)],
                                         dtype=np.int32)
                         mask[i + j + 1] = False
-            new_lines.append(line)  """
+            new_lines.append(line) 
 
-    # Find two lines that are approximately perpendicular
+    """# Find two lines that are approximately perpendicular
     min_diff = float('inf')
     for i in range(0,len(lines)):
         line_i = lines[i]
@@ -158,7 +150,7 @@ def merge_lines(lines):
             diff = angle_between_lines(line_i, lines[j])
             if diff > 30 and diff < 140:
                 #print(diff)
-                return [lines[i], lines[j]]
+                return [lines[i], lines[j]]"""
 
     return new_lines      
 
@@ -181,6 +173,33 @@ def draw_lines(image, lines, color):
         x1, y1, x2, y2 = line
         cv2.line(image, (x1, y1), (x2, y2), colors, 2) 
         i += 10
+
+def postprocess(heatmap, scale=2, low_thresh=155, min_radius=10, max_radius=30):
+    """
+    This function postprocesses the feature map to get the keypoints.
+
+    Args:
+        heatmap: A numpy array representing the feature map.
+        scale: An integer representing the scale of the heatmap.
+    
+    Returns:
+        x: An integer representing the x-coordinate of the keypoint.
+        y: An integer representing the y-coordinate of the keypoint.
+        
+    """
+    feature_map = feature_map.reshape((360, 640))
+    feature_map = feature_map.astype(np.uint8)
+    ret, heatmap = cv2.threshold(feature_map, low_thresh, 255, cv2.THRESH_BINARY)
+    circles = cv2.HoughCircles(heatmap, cv2.HOUGH_GRADIENT, dp=1, minDist=20, param1=50, param2=2, minRadius=min_radius, maxRadius=max_radius)
+
+    x_pred, y_pred = None, None
+    if circles is not None:
+        if len(circles) == 1:
+            x = circles[0][0][0]*scale
+            y = circles[0][0][1]*scale
+    
+    return x_pred, y_pred
+
 
 if __name__ == '__main__':
     lines = detect_lines(cv2.imread('input/image_crop.jpg'))
